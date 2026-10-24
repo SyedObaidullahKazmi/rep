@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Device & Browser Information</title>
+<style>
+  :root { color-scheme: light dark; --border: #8885; --muted: #777; --panel: #8881; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { padding: 24px 18px 16px; border-bottom: 1px solid var(--border); }
+  main { max-width: 980px; margin: auto; padding: 18px; }
+  h1 { font-size: clamp(1.45rem, 4vw, 2rem); margin: 0 0 6px; }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; }
+  p { margin: 5px 0; }
+  .muted { color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 14px; }
+  section { border: 1px solid var(--border); border-radius: 14px; padding: 16px; min-width: 0; }
+  dl { display: grid; grid-template-columns: minmax(115px, .8fr) minmax(0, 1.2fr); gap: 8px 12px; margin: 0; }
+  dt { color: var(--muted); overflow-wrap: anywhere; }
+  dd { margin: 0; overflow-wrap: anywhere; word-break: break-word; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel); border-radius: 9px; padding: 12px; max-height: 340px; overflow: auto; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  button { border: 1px solid var(--border); border-radius: 9px; padding: 9px 13px; font: inherit; cursor: pointer; background: var(--panel); color: inherit; }
+  .note { border-left: 3px solid #d69e2e; padding: 10px 12px; background: var(--panel); border-radius: 4px 10px 10px 4px; margin: 14px 0; }
+  footer { padding: 12px 0 30px; color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<header>
+  <main>
+    <h1>Device & Browser Information</h1>
+    <p class="muted">Local diagnostic page — data is displayed in this browser and is not uploaded anywhere.</p>
+    <div class="actions">
+      <button id="refresh">Refresh information</button>
+      <button id="copy">Copy JSON</button>
+      <button id="download">Download JSON</button>
+    </div>
+  </main>
+</header>
+<main>
+  <div class="note">
+    <strong>Model detection note:</strong> Exact phone model appears only if the browser exposes it through Client Hints or other available signals. It cannot be guaranteed. For full HTTP Client Hints, host this page on HTTPS/localhost and configure your server to send an <code>Accept-CH</code> response header.
+  </div>
+  <div class="grid">
+    <section><h2>Device / Client Hints</h2><dl id="device"></dl></section>
+    <section><h2>Browser & Platform</h2><dl id="browser"></dl></section>
+    <section><h2>Screen & Display</h2><dl id="screen"></dl></section>
+    <section><h2>Capabilities</h2><dl id="capabilities"></dl></section>
+    <section><h2>Locale & Network</h2><dl id="locale"></dl></section>
+    <section><h2>Privacy / Availability</h2><dl id="privacy"></dl></section>
+  </div>
+  <section style="margin-top:14px">
+    <h2>Raw collected information (JSON)</h2>
+    <pre id="raw">Loading…</pre>
+  </section>
+  <footer>Some fields may be unavailable or reduced by browser privacy protections. User-Agent and Client Hints can be spoofed; do not use them as proof of identity or as the only login-security check.</footer>
+</main>
+<script>
+(() => {
+  let collected = {};
+  const safe = (fn, fallback = "Not available") => {
+    try { const v = fn(); return v === undefined || v === null || v === "" ? fallback : v; }
+    catch { return fallback; }
+  };
+  const yesNo = v => v ? "Yes" : "No";
+  const put = (id, obj) => {
+    const root = document.getElementById(id);
+    root.replaceChildren();
+    for (const [key, value] of Object.entries(obj)) {
+      const dt = document.createElement("dt");
+      dt.textContent = key;
+      const dd = document.createElement("dd");
+      dd.textContent = typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
+      root.append(dt, dd);
+    }
+  };
+  async function collect() {
+    const n = navigator;
+    const s = window.screen;
+    const uaData = n.userAgentData;
+    let hints = null;
+    if (uaData && typeof uaData.getHighEntropyValues === "function") {
+      hints = await safeAsync(() => uaData.getHighEntropyValues([
+        "architecture", "bitness", "formFactors", "fullVersionList",
+        "model", "platformVersion", "uaFullVersion", "wow64"
+      ]), null);
+    }
+    const conn = n.connection || n.mozConnection || n.webkitConnection;
+    const battery = await safeAsync(() => n.getBattery ? n.getBattery().then(b => ({
+      charging: b.charging, level: Math.round(b.level * 100) + "%",
+      chargingTimeSeconds: b.chargingTime, dischargingTimeSeconds: b.dischargingTime
+    })) : Promise.resolve("API not supported"), "Unavailable");
+    const touch = safe(() => n.maxTouchPoints, 0);
+    const device = {
+      "Client Hints supported": yesNo(!!uaData),
+      "Brand / model from Client Hints": hints?.model || "Not exposed by browser",
+      "Platform from Client Hints": hints?.platform || uaData?.platform || "Not available",
+      "Platform version": hints?.platformVersion || "Not exposed",
+      "Form factors": hints?.formFactors || "Not exposed",
+      "Architecture": hints?.architecture || "Not exposed",
+      "Bitness": hints?.bitness || "Not exposed",
+      "Full browser versions": hints?.fullVersionList || "Not exposed",
+      "Touch points": touch,
+      "Likely touch device": yesNo(touch > 0)
+    };
+    const browser = {
+      "User-Agent": safe(() => n.userAgent),
+      "User-Agent Data brands": uaData?.brands || "Not available",
+      "Platform (legacy)": safe(() => n.platform),
+      "Vendor": safe(() => n.vendor),
+      "App name": safe(() => n.appName),
+      "App version": safe(() => n.appVersion),
+      "Cookies enabled": yesNo(safe(() => n.cookieEnabled, false)),
+      "Java enabled": yesNo(safe(() => n.javaEnabled(), false))
+    };
+    const screenInfo = {
+      "Screen size": `${s.width} × ${s.height}`,
+      "Available screen size": `${s.availWidth} × ${s.availHeight}`,
+      "Color depth": safe(() => s.colorDepth),
+      "Pixel depth": safe(() => s.pixelDepth),
+      "Device pixel ratio": safe(() => window.devicePixelRatio),
+      "Viewport size": `${window.innerWidth} × ${window.innerHeight}`,
+      "Orientation": safe(() => s.orientation?.type),
+      "Reduced motion": safe(() => matchMedia("(prefers-reduced-motion: reduce)").matches),
+      "Dark mode preference": safe(() => matchMedia("(prefers-color-scheme: dark)").matches)
+    };
+    const capabilities = {
+      "CPU logical cores": safe(() => n.hardwareConcurrency),
+      "Approx. device memory (GB)": safe(() => n.deviceMemory),
+      "WebGL available": yesNo(!!document.createElement("canvas").getContext("webgl")),
+      "WebGPU available": yesNo(!!n.gpu),
+      "Service Worker supported": yesNo("serviceWorker" in n),
+      "WebAssembly supported": yesNo(typeof WebAssembly === "object"),
+      "Bluetooth API supported": yesNo("bluetooth" in n),
+      "USB API supported": yesNo("usb" in n),
+      "NFC API supported": yesNo("NDEFReader" in window),
+      "Vibration API supported": yesNo("vibrate" in n),
+      "Geolocation API supported": yesNo("geolocation" in n),
+      "Media devices API supported": yesNo(!!n.mediaDevices),
+      "Battery": battery
+    };
+    const locale = {
+      "Language": safe(() => n.language),
+      "All languages": safe(() => n.languages),
+      "Timezone": safe(() => Intl.DateTimeFormat().resolvedOptions().timeZone),
+      "Timezone offset (minutes)": new Date().getTimezoneOffset(),
+      "Online": yesNo(n.onLine),
+      "Connection type": safe(() => conn?.type),
+      "Effective connection": safe(() => conn?.effectiveType),
+      "Downlink estimate (Mbps)": safe(() => conn?.downlink),
+      "RTT estimate (ms)": safe(() => conn?.rtt),
+      "Data saver": safe(() => conn?.saveData)
+    };
+    const privacy = {
+      "Do Not Track": safe(() => n.doNotTrack),
+      "Global Privacy Control": safe(() => navigator.globalPrivacyControl),
+      "PDF viewer enabled": safe(() => n.pdfViewerEnabled),
+      "Permissions API supported": yesNo("permissions" in n),
+      "Clipboard API supported": yesNo(!!n.clipboard),
+      "Referrer": safe(() => document.referrer, "(none)"),
+      "Page protocol": location.protocol,
+      "Secure context": yesNo(window.isSecureContext),
+      "Battery / location / camera permissions": "Not requested by this page"
+    };
+    collected = {
+      generatedAt: new Date().toISOString(),
+      note: "Client-side data only. This page does not upload the collected data.",
+      device, browser, screen: screenInfo, capabilities, locale, privacy,
+      clientHintsRaw: hints
+    };
+    put("device", device);
+    put("browser", browser);
+    put("screen", screenInfo);
+    put("capabilities", capabilities);
+    put("locale", locale);
+    put("privacy", privacy);
+    document.getElementById("raw").textContent = JSON.stringify(collected, null, 2);
+  }
+  async function safeAsync(fn, fallback) { try { return await fn(); } catch { return fallback; } }
+  document.getElementById("refresh").addEventListener("click", collect);
+  document.getElementById("copy").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(collected, null, 2));
+      document.getElementById("copy").textContent = "Copied!";
+      setTimeout(() => document.getElementById("copy").textContent = "Copy JSON", 1500);
+    } catch {
+      alert("Clipboard access was blocked. Select and copy the JSON shown on the page.");
+    }
+  });
+  document.getElementById("download").addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(collected, null, 2)], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "device-info.json"; a.click();
+    URL.revokeObjectURL(url);
+  });
+  collect();
+})();
+</script>
+</body>
+</html>
